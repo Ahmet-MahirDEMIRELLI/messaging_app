@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/services.dart';
+import 'package:messaging_app/main_page.dart';
 import 'package:pointycastle/export.dart' as pc;
 import 'dart:typed_data';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -27,117 +29,152 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
-    // key oluşturmadan nickname kontrolü yap
-
     final keys = await createKeyPair();
+    final url = Uri.parse('https://localhost:7064/api/user/createUser');
+    final createUserDto = {
+      'nickname': nickname,
+      'x25519PublicKey': keys['x25519PublicKey'],
+      'ed25519PublicKey': keys['ed25519PublicKey'],
+    };
 
-    print('Kayıt olunuyor: $nickname');
-    print('X25519 Public Key: ${keys['x25519PublicKey']}');
-    print('X25519 Private Key: ${keys['x25519PrivateKey']}');
-    print('Ed25519 Public Key: ${keys['ed25519PublicKey']}');
-    print('Ed25519 Private Key: ${keys['ed25519PrivateKey']}');
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(createUserDto),
+      );
 
-    // 1. Güçlü şifre oluştur
-    final password = generateStrongPassword(32);
+      if (response.statusCode == 201) {
 
-    // 2. Private key'i byte dizisine çevir (örnek ed25519 private key)
-    final privateKeyBase64 = keys['ed25519PrivateKey'];
-    if (privateKeyBase64 == null) {
-      // Hata yönetimi
-      throw Exception('ed25519PrivateKey null olamaz!');
-    }
-    final privateKeyBytes = base64Decode(privateKeyBase64);
+        print('Kullanıcı başarıyla oluşturuldu.');
 
-    // 3. Şifreleme için rastgele nonce üret (12 byte)
-    final nonce = Uint8List(12);
-    final random = Random.secure();
-    for (int i = 0; i < nonce.length; i++) {
-      nonce[i] = random.nextInt(256);
-    }
+        // 1. Güçlü şifre oluştur
+        final password = generateStrongPassword(32);
 
-    // 4. Password'u 32 byte key'e dönüştürmek için PBKDF2 uygula (salt da random olmalı)
-    final salt = Uint8List(16);
-    for (int i = 0; i < salt.length; i++) {
-      salt[i] = random.nextInt(256);
-    }
-    final key = pbkdf2(password, salt);
+        // 2. Private key'i byte dizisine çevir
+        final ed25519PrivateKeyBase64 = keys['ed25519PrivateKey'];
+        if (ed25519PrivateKeyBase64 == null) {
+          // Hata yönetimi
+          throw Exception('ed25519PrivateKey null olamaz!');
+        }
+        final ed25519PrivateKeyBytes = base64Decode(ed25519PrivateKeyBase64);
 
-    // 5. Private key'i AES-GCM ile şifrele
-    final encryptedPrivateKey = encryptAESGCM(key, privateKeyBytes, nonce);
+        final x25519PrivateKeyBase64 = keys['x25519PrivateKey'];
+        if (x25519PrivateKeyBase64 == null) {
+          // Hata yönetimi
+          throw Exception('x25519PrivateKey null olamaz!');
+        }
+        final x25519PrivateKeyBytes = base64Decode(x25519PrivateKeyBase64);
 
-    // 6. Şifrelenmiş veriyi ve nonce+salt'ı JSON yapısında sakla
-    final saveData = jsonEncode({
-      'encryptedPrivateKey': base64Encode(encryptedPrivateKey),
-      'nonce': base64Encode(nonce),
-      'salt': base64Encode(salt),
-    });
+        // 3. Şifreleme için rastgele nonce üret (12 byte)
+        final nonce = Uint8List(12);
+        final random = Random.secure();
+        for (int i = 0; i < nonce.length; i++) {
+          nonce[i] = random.nextInt(256);
+        }
 
-    // 7. Dosya yolunu al ve dosyaya yaz (örnek: private_key.json)
-    final dir = await getApplicationDocumentsDirectory();
-    final appDir = Directory('${dir.path}/messaging_app');
+        // 4. Password'u 32 byte key'e dönüştürmek için PBKDF2 uygula (salt da random olmalı)
+        final salt = Uint8List(16);
+        for (int i = 0; i < salt.length; i++) {
+          salt[i] = random.nextInt(256);
+        }
+        final key = pbkdf2(password, salt);
 
-    if (!await appDir.exists()) {
-      await appDir.create(recursive: true);
-    }
+        // 5. Private key'i AES-GCM ile şifrele
+        final encryptedX25519PrivateKey = encryptAESGCM(key, x25519PrivateKeyBytes, nonce);
+        final encryptedEd25519PrivateKey = encryptAESGCM(key, ed25519PrivateKeyBytes, nonce);
 
-    final file = File('${appDir.path}/private_key_${nickname}.json');
-    print('File path: ${file.path}');
-    await file.writeAsString(saveData);
+        // 6. Şifrelenmiş veriyi ve nonce+salt'ı JSON yapısında sakla
+        final saveData = jsonEncode({
+          'nickname': nickname,
+          'x25519PublicKey': keys['x25519PublicKey'],
+          'ed25519PublicKey': keys['ed25519PublicKey'],
+          'encryptedX25519PrivateKey': base64Encode(encryptedX25519PrivateKey),
+          'encryptedEd25519PrivateKey': base64Encode(encryptedEd25519PrivateKey),
+          'nonce': base64Encode(nonce),
+          'salt': base64Encode(salt),
+        });
 
-    // 8. Kullanıcıya şifreyi göster ve saklamasını söyle
-    showDialog(
-      context: context,
-      builder: (context) {
-        bool copied = false; // Buton durumu için değişken
+        // 7. Dosya yolunu al ve dosyaya yaz (örnek: private_key.json)
+        final dir = await getApplicationDocumentsDirectory();
+        final appDir = Directory('${dir.path}/messaging_app');
 
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text('Önemli!'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SelectableText(
-                    'Private key güvenliğiniz için şifrelenmiştir.\n'
-                    'Bu şifreyi mutlaka saklayın ve unutmayın:\n\n$password',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+        if (!await appDir.exists()) {
+          await appDir.create(recursive: true);
+        }
+
+        final file = File('${appDir.path}/keys_${nickname}.json');
+        await file.writeAsString(saveData);
+
+        // 8. Kullanıcıya şifreyi göster ve saklamasını söyle
+        showDialog(
+          context: context,
+          builder: (context) {
+            bool copied = false; // Buton durumu için değişken
+
+            return StatefulBuilder(
+              builder: (context, setState) {
+                return AlertDialog(
+                  title: const Text('Önemli!'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SelectableText(
+                        'Private key güvenliğiniz için şifrelenmiştir.\n'
+                        'Bu şifreyi mutlaka saklayın ve unutmayın:\n\n$password',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        onPressed: copied ? null : () {
+                          Clipboard.setData(ClipboardData(text: password));
+                          setState(() {
+                            copied = true;
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Şifre kopyalandı!')),
+                          );
+                        },
+                        icon: const Icon(Icons.copy),
+                        label: Text(copied ? 'Kopyalandı!' : 'Kopyala'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    onPressed: copied ? null : () {
-                      Clipboard.setData(ClipboardData(text: password));
-                      setState(() {
-                        copied = true;
-                      });
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Şifre kopyalandı!')),
-                      );
-                    },
-                    icon: const Icon(Icons.copy),
-                    label: Text(copied ? 'Kopyalandı!' : 'Kopyala'),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Tamam'),
-                ),
-              ],
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context); // Dialogu kapat
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (context) => const MainPage()),
+                        );
+                      },
+                      child: const Text('Tamam'),
+                    ),
+                  ],
+                );
+              },
             );
           },
         );
-      },
-    );
 
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Kayıt olunuyor: $nickname')),
+        );
 
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Kayıt olunuyor: $nickname')),
-    );
-
-    // TODO: Backend'e nickname + public key'leri POST et
-    // LOGİN E gönder
+      } else {
+        // Hata mesajı göster
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Kayıt başarısız: Kullanıcı adı geçersiz.')),
+        );
+        return;
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sunucu bağlantı hatası: $e')),
+      );
+      return;
+    }
   }
 
   // PBKDF2 fonksiyonu
