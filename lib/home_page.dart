@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:messaging_app/main_page.dart';
@@ -67,7 +68,7 @@ class Contact {
 
 class _HomePageState extends State<HomePage> {
   List<Message> messages = [];
-  final TextEditingController messageController = TextEditingController();
+  final TextEditingController _messageController = TextEditingController();
   List<Contact> contacts = [];
   String? selectedUser;  // Başlangıçta seçili kullanıcı yok
   final TextEditingController _newContactController = TextEditingController();
@@ -75,6 +76,8 @@ class _HomePageState extends State<HomePage> {
   late Uint8List publicX25519;
   late Uint8List decryptedEd25519;
   late Uint8List publicEd25519;
+  DateTime lastMessageDateTime = DateTime(2000);
+  Timer? _timer;
 
   @override
   void initState() {
@@ -82,6 +85,11 @@ class _HomePageState extends State<HomePage> {
     _loadAndDecryptKeys();
     _loadContacts();
     _loadMessages();
+    getNewMessages();
+
+    _timer = Timer.periodic(Duration(seconds: 10), (timer) {
+      getNewMessages();
+    });
   }
 
   Uint8List pbkdf2(String password, Uint8List salt) {
@@ -155,6 +163,12 @@ class _HomePageState extends State<HomePage> {
           selectedUser = contacts.isNotEmpty ? contacts[0].nickname : null;
           messages.clear();
         });
+
+        print("********************");
+        for(int i = 0; i< contacts.length; i++){
+          print(contacts[i].nickname);
+        }
+        print("********************");
       } else {
         setState(() {
           contacts = [];
@@ -211,7 +225,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void sendMessage() async {
-    final text = messageController.text.trim();
+    final text = _messageController.text.trim();
 
     if (text.isEmpty || selectedUser == null) return;
 
@@ -273,7 +287,7 @@ class _HomePageState extends State<HomePage> {
               content: text,
               timestamp: DateTime.parse(responseJson['timestamp']),
             ));
-            messageController.clear();
+            _messageController.clear();
           });
         } 
         else {
@@ -292,6 +306,59 @@ class _HomePageState extends State<HomePage> {
         SnackBar(content: Text('Mesaj gönderilemedi: $e')),
       );
     }
+  }
+
+  void getNewMessages() async{
+    final url = Uri.parse('https://localhost:7064/api/message/getNewMessages/${widget.nickname}/${lastMessageDateTime.toIso8601String()}');
+    try {
+      final response = await http.get(
+        url,
+        headers: {'Content-Type': 'application/json'}
+      );
+
+      if (response.statusCode == 200) {
+        final List<dynamic> responseJson = jsonDecode(response.body);
+        await processNewMessages(responseJson);
+      } 
+      else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sistem hatası')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sunucu bağlantı hatası: $e')),
+      );
+    }
+  }
+
+  Future<void> processNewMessages(List<dynamic> responseJson) async {
+    List<Message> newMessages = [];
+
+    for (var item in responseJson) {
+      try {
+        String decryptedContent = await decodeMessage(item['sender'], item['content']);
+
+        DateTime msgTime = DateTime.parse(item['timestamp']);
+        newMessages.add(Message(
+          sender: item['sender'],
+          receiver: item['receiver'],
+          content: decryptedContent,
+          timestamp: msgTime,
+        ));
+
+        if (lastMessageDateTime.isBefore(msgTime)) {
+          lastMessageDateTime = msgTime.add(const Duration(microseconds: 1));
+        }
+      } catch (e, stack) {
+        print('Error decoding message from ${item['sender']}: $e');
+        print(stack);
+      }
+    }
+    setState(() {
+      messages.addAll(newMessages);
+      _messageController.clear();
+    });
   }
 
   Future<Map<String, dynamic>> encodeMessage(Uint8List receiverPublicKeyBytes,String message) async {
@@ -335,13 +402,63 @@ class _HomePageState extends State<HomePage> {
     };
   }
 
+  Future<String> decodeMessage(String senderNickname, String encryptedData) async {
+    // 1. contacts listesinden sender'ın public key'i bulunuyor
+    final contactEntry = contacts.firstWhere(
+      (c) => c.nickname == senderNickname,
+      orElse: () => throw Exception('Gönderen bulunamadı: $senderNickname'),
+    );
+
+    final senderPublicKeyBase64 = contactEntry.x25519PublicKey;
+    final senderPublicKeyBytes = base64Decode(senderPublicKeyBase64);
+
+    // 2. encryptedData JSON string olarak geliyor, parse et
+    final decodedJsonString = utf8.decode(base64Decode(encryptedData));
+    final Map<String, dynamic> encryptedJson = jsonDecode(decodedJsonString);
+    final encryptedMessage = base64Decode(encryptedJson['encryptedMessage']);
+    final nonce = base64Decode(encryptedJson['nonce']);
+    final macBytes = base64Decode(encryptedJson['mac']);
+
+    // 3. Ortak anahtarı hesapla (X25519)
+    final algorithm = X25519();
+    final receiverPublicKey = SimplePublicKey(publicX25519, type: KeyPairType.x25519,);
+    final receiverKeyPair = SimpleKeyPairData(decryptedX25519, publicKey: receiverPublicKey, type: KeyPairType.x25519,);
+
+    final senderPublicKey = SimplePublicKey(
+      senderPublicKeyBytes,
+      type: KeyPairType.x25519,
+    );
+
+    final sharedSecret = await algorithm.sharedSecretKey(
+      keyPair: receiverKeyPair,
+      remotePublicKey: senderPublicKey,
+    );
+
+    final sharedSecretBytes = await sharedSecret.extractBytes();
+
+    // 4. AES-GCM ile şifre çözme
+    final aesGcm = AesGcm.with256bits();
+    final secretKey = SecretKey(sharedSecretBytes);
+    final secretBox = SecretBox(
+      encryptedMessage,
+      nonce: nonce,
+      mac: Mac(macBytes),
+    );
+
+    final decryptedBytes = await aesGcm.decrypt(
+      secretBox,
+      secretKey: secretKey,
+    );
+
+    return utf8.decode(decryptedBytes);
+  }
+
   // Helper fonksiyon: rastgele nonce üretimi
   Uint8List _generateNonce(int length) {
     final random = Random.secure();
     final bytes = List<int>.generate(length, (_) => random.nextInt(256));
     return Uint8List.fromList(bytes);
   }
-
 
   void addContact(String newNickname) async {
     final url = Uri.parse('https://localhost:7064/api/user/getKeysByNickname/$newNickname');
@@ -355,7 +472,7 @@ class _HomePageState extends State<HomePage> {
         final jsonData = jsonDecode(response.body);
 
         final newContactMap = {
-          "nickname": newNickname,
+          "nickname": newNickname.toLowerCase(),
           "ed25519PublicKey": jsonData["ed25519PublicKey"],
           "x25519PublicKey": jsonData["x25519PublicKey"],
         };
@@ -441,8 +558,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    messageController.dispose();
+    _messageController.dispose();
     _newContactController.dispose();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -634,7 +752,7 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           Expanded(
                             child: TextField(
-                              controller: messageController,
+                              controller: _messageController,
                               enabled: selectedUser != null,
                               style: TextStyle(
                                 color: selectedUser != null ? Colors.white : Colors.white54,

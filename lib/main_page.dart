@@ -31,7 +31,7 @@ class _MainPageState extends State<MainPage> {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (context) => HomePage(nickname: nickname, password: password),
+        builder: (context) => HomePage(nickname: nickname.toLowerCase(), password: password),
       ),
     );
   }
