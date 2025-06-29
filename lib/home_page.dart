@@ -163,12 +163,6 @@ class _HomePageState extends State<HomePage> {
           selectedUser = contacts.isNotEmpty ? contacts[0].nickname : null;
           messages.clear();
         });
-
-        print("********************");
-        for(int i = 0; i< contacts.length; i++){
-          print(contacts[i].nickname);
-        }
-        print("********************");
       } else {
         setState(() {
           contacts = [];
@@ -209,7 +203,6 @@ class _HomePageState extends State<HomePage> {
         });
 
         print('Mesajlar yüklendi. (${messages.length} adet)');
-        print(messages);
       } else {
         print('Mesaj dosyası bulunamadı. Yeni mesaj listesi oluşturulacak.');
         setState(() {
