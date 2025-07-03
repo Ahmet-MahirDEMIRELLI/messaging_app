@@ -29,13 +29,51 @@ class Message {
   final String receiver;
   final String content;
   final DateTime timestamp;
+  final bool isRead;
 
   Message({
     required this.sender,
     required this.receiver,
     required this.content,
     required this.timestamp,
+    required this.isRead,
   });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'sender': sender,
+      'receiver': receiver,
+      'content': content,
+      'timestamp': timestamp.toIso8601String(),
+      'isRead': isRead,
+    };
+  }
+
+  factory Message.fromJson(Map<String, dynamic> json) {
+    return Message(
+      sender: json['sender'],
+      receiver: json['receiver'],
+      content: json['content'],
+      timestamp: DateTime.parse(json['timestamp']),
+      isRead: json['isRead'] ?? false,
+    );
+  }
+
+  Message copyWith({
+    String? sender,
+    String? receiver,
+    String? content,
+    DateTime? timestamp,
+    bool? isRead,
+  }) {
+    return Message(
+      sender: sender ?? this.sender,
+      receiver: receiver ?? this.receiver,
+      content: content ?? this.content,
+      timestamp: timestamp ?? this.timestamp,
+      isRead: isRead ?? this.isRead,
+    );
+  }
 }
 
 class Contact {
@@ -82,14 +120,26 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _loadAndDecryptKeys();
-    _loadContacts();
-    _loadMessages();
-    getNewMessages();
+    asyncInit(); // Async işlemleri burada başlat
+  }
 
-    _timer = Timer.periodic(Duration(seconds: 10), (timer) {
+  void asyncInit() async {
+    await _loadAndDecryptKeys();
+    await _loadContacts();
+    await _loadMessages();
+    await getNewMessages();
+
+    _timer = Timer.periodic(const Duration(seconds: 10), (timer) {
       getNewMessages();
+      printMessages();
     });
+  }
+
+  void printMessages() async{
+    for (var message in messages) {
+      print('Sender: ${message.sender}, Receiver: ${message.receiver}, Content: ${message.content}, Timestamp: ${message.timestamp}, isRead: ${message.isRead}');
+    }
+    print("*****************************");
   }
 
   Uint8List pbkdf2(String password, Uint8List salt) {
@@ -188,22 +238,21 @@ class _HomePageState extends State<HomePage> {
       if (await file.exists()) {
         final content = await file.readAsString();
         final List<dynamic> jsonData = jsonDecode(content);
-
-        final loadedMessages = jsonData.map((item) {
-          return Message(
-            sender: item['sender'],
-            receiver: item['receiver'],
-            content: item['content'],
-            timestamp: DateTime.parse(item['timestamp']),
-          );
-        }).toList();
+        final decryptedMessages = await decryptLoadedMessages(jsonData);
 
         setState(() {
-          messages = loadedMessages;
+          messages.addAll(decryptedMessages);
         });
 
+        for(int i = 0; i < messages.length; i++){
+          if (lastMessageDateTime.isBefore(messages[i].timestamp)) {
+            lastMessageDateTime = messages[i].timestamp.add(const Duration(microseconds: 1));
+          }
+        }
+
         print('Mesajlar yüklendi. (${messages.length} adet)');
-      } else {
+      } 
+      else {
         print('Mesaj dosyası bulunamadı. Yeni mesaj listesi oluşturulacak.');
         setState(() {
           messages = [];
@@ -255,10 +304,14 @@ class _HomePageState extends State<HomePage> {
       final encryptedMap = await encodeMessage(receiverX25519PublicKey, text);
       final jsonString = jsonEncode(encryptedMap);
       final encryptedMessageBase64 = base64Encode(utf8.encode(jsonString));
+      final String dataToSign = '${widget.nickname.toLowerCase()}|${selectedUser?.toLowerCase()}|$encryptedMessageBase64';
+      final Uint8List signatureBytes = await signWithPrivateKey(dataToSign);
+      final String signatureBase64 = base64Encode(signatureBytes);
       final sendMessageDto = {
         "sender": widget.nickname,
         "receiver": selectedUser,
-        "content": encryptedMessageBase64
+        "content": encryptedMessageBase64,
+        "signature": signatureBase64,
       };
 
 
@@ -272,17 +325,22 @@ class _HomePageState extends State<HomePage> {
 
         if (response.statusCode == 200) {
           final responseJson = jsonDecode(response.body);
-
+          DateTime msgTime = DateTime.parse(responseJson['timestamp']);
+          Message newMessage = Message(sender: responseJson['sender'], receiver: responseJson['receiver'], content: "Your message", timestamp: msgTime, isRead: true);
           setState(() {
-            messages.add(Message(
-              sender: responseJson['sender'],
-              receiver: responseJson['receiver'],
-              content: text,
-              timestamp: DateTime.parse(responseJson['timestamp']),
-            ));
+            messages.add(newMessage);
             _messageController.clear();
           });
-        } 
+
+          List<Message> encryptedMessages = [];
+          encryptedMessages.add(newMessage);
+          await saveMessages(encryptedMessages);
+        }
+        else if (response.statusCode == 401) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Mesaj gönderilemedi: İmza geçersiz.')),
+          ); 
+        }
         else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Mesaj gönderilemedi: Kullanıcı adı geçersiz.')),
@@ -301,7 +359,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void getNewMessages() async{
+  Future<void> getNewMessages() async{
     final url = Uri.parse('https://localhost:7064/api/message/getNewMessages/${widget.nickname}/${lastMessageDateTime.toIso8601String()}');
     try {
       final response = await http.get(
@@ -327,18 +385,16 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> processNewMessages(List<dynamic> responseJson) async {
     List<Message> newMessages = [];
+    List<Message> encryptedMessages = [];
 
     for (var item in responseJson) {
       try {
         String decryptedContent = await decodeMessage(item['sender'], item['content']);
-
         DateTime msgTime = DateTime.parse(item['timestamp']);
-        newMessages.add(Message(
-          sender: item['sender'],
-          receiver: item['receiver'],
-          content: decryptedContent,
-          timestamp: msgTime,
-        ));
+        Message newMessage = Message(sender: item['sender'], receiver: item['receiver'], content: decryptedContent, timestamp: msgTime, isRead: false);
+        newMessages.add(newMessage);
+        Message encryptedMessage = newMessage.copyWith(content: item['content']);
+        encryptedMessages.add(encryptedMessage);
 
         if (lastMessageDateTime.isBefore(msgTime)) {
           lastMessageDateTime = msgTime.add(const Duration(microseconds: 1));
@@ -352,6 +408,51 @@ class _HomePageState extends State<HomePage> {
       messages.addAll(newMessages);
       _messageController.clear();
     });
+
+    if (encryptedMessages.isNotEmpty) {
+      await saveMessages(encryptedMessages);
+    }
+  }
+
+  Future<void> saveMessages(List<Message> messagesToSave) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final appDir = Directory('${dir.path}/messaging_app');
+      if (!await appDir.exists()) {
+        await appDir.create(recursive: true);
+      }
+
+      final file = File('${appDir.path}/messages_${widget.nickname}.json');
+
+      List<dynamic> existingMessages = [];
+
+      if (!await file.exists()) {
+        print('Mesaj dosyası bulunamadı. Yeni dosya oluşturulacak.');
+        await file.create(recursive: true);
+        await file.writeAsString('[]', flush: true);
+      }
+
+      final content = await file.readAsString();
+      if (content.trim().isNotEmpty) {
+        existingMessages = jsonDecode(content);
+      }
+
+      for (var msg in messagesToSave) {
+        existingMessages.add(msg.toJson());
+      }
+
+      // Dosyaya yaz
+      final encoder = const JsonEncoder.withIndent('  ');
+      final beautifiedJson = encoder.convert(existingMessages);
+      await file.writeAsString(beautifiedJson, flush: true);
+
+      print('${messagesToSave.length} mesaj başarıyla kaydedildi.');
+    } catch (e) {
+      print('Mesaj kaydedilirken hata oluştu: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mesaj kaydedilemedi: $e')),
+      );
+    }
   }
 
   Future<Map<String, dynamic>> encodeMessage(Uint8List receiverPublicKeyBytes,String message) async {
@@ -446,6 +547,35 @@ class _HomePageState extends State<HomePage> {
     return utf8.decode(decryptedBytes);
   }
 
+  Future<List<Message>> decryptLoadedMessages(List<dynamic> jsonData) async {
+    final List<Future<Message>> decryptFutures = jsonData.map((item) async {
+      var decryptedContent;
+      if(item['sender'] != widget.nickname){
+        decryptedContent = await decodeMessage(item['sender'], item['content']);
+      }
+      else{
+        decryptedContent = "Your message";
+      }
+
+      // lastMessageDateTime
+      DateTime msgTime = DateTime.parse(item['timestamp']);
+      if (lastMessageDateTime.isBefore(msgTime)) {
+        lastMessageDateTime = msgTime.add(const Duration(microseconds: 1));
+      }
+
+      return Message(
+        sender: item['sender'],
+        receiver: item['receiver'],
+        content: decryptedContent,
+        timestamp: DateTime.parse(item['timestamp']),
+        isRead: item['read_status'] ?? false,
+      );
+    }).toList();
+
+    // Tüm şifre çözüm işlemleri bitince liste dön
+    return await Future.wait(decryptFutures);
+  }
+
   // Helper fonksiyon: rastgele nonce üretimi
   Uint8List _generateNonce(int length) {
     final random = Random.secure();
@@ -453,6 +583,17 @@ class _HomePageState extends State<HomePage> {
     return Uint8List.fromList(bytes);
   }
 
+  Future<Uint8List> signWithPrivateKey(String data) async {
+    final algorithm = Ed25519();
+    final senderPublicKey = SimplePublicKey(publicEd25519, type: KeyPairType.ed25519,);
+    final senderKeyPair = SimpleKeyPairData(decryptedEd25519, publicKey: senderPublicKey, type: KeyPairType.ed25519,);
+    final signature = await algorithm.sign(
+      utf8.encode(data),
+      keyPair: senderKeyPair,
+    );
+    return Uint8List.fromList(signature.bytes);
+  }
+  
   void addContact(String newNickname) async {
     final url = Uri.parse('https://localhost:7064/api/user/getKeysByNickname/$newNickname');
     try {
@@ -655,7 +796,7 @@ class _HomePageState extends State<HomePage> {
                             onTap: () {
                               setState(() {
                                 selectedUser = nickname;
-                                messages.clear(); // Seçim değişince mesajları temizle
+                                //messages.clear(); // Seçim değişince mesajları temizle
                               });
                             },
                           );
