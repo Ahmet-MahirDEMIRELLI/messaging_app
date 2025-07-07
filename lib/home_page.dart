@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:messaging_app/main_page.dart';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +10,7 @@ import 'package:pointycastle/export.dart' as pc;
 import 'package:http/http.dart' as http;
 import 'package:cryptography/cryptography.dart';
 import 'dart:math';
+import 'package:collection/collection.dart';
 
 class HomePage extends StatefulWidget {
   final String nickname;
@@ -104,8 +106,17 @@ class Contact {
   }
 }
 
+class ChatItem {
+  final Message? message;
+  final DateTime? dateHeader;
+
+  ChatItem.message(this.message) : dateHeader = null;
+  ChatItem.dateHeader(this.dateHeader) : message = null;
+}
+
 class _HomePageState extends State<HomePage> {
   List<Message> messages = [];
+  List<Message> messagesToShow = [];
   final TextEditingController _messageController = TextEditingController();
   List<Contact> contacts = [];
   String? selectedUser;  // Başlangıçta seçili kullanıcı yok
@@ -129,17 +140,21 @@ class _HomePageState extends State<HomePage> {
     await _loadMessages();
     await getNewMessages();
 
+    if(selectedUser != null){
+      showMessages();
+    }
+
     _timer = Timer.periodic(const Duration(seconds: 10), (timer) {
       getNewMessages();
-      printMessages();
     });
   }
 
-  void printMessages() async{
-    for (var message in messages) {
-      print('Sender: ${message.sender}, Receiver: ${message.receiver}, Content: ${message.content}, Timestamp: ${message.timestamp}, isRead: ${message.isRead}');
-    }
-    print("*****************************");
+  void showMessages() {
+    setState(() {
+      messagesToShow = messages.where((msg) =>
+        msg.sender == selectedUser || msg.receiver == selectedUser
+      ).toList();
+    });
   }
 
   Uint8List pbkdf2(String password, Uint8List salt) {
@@ -211,7 +226,6 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           contacts = loadedContacts;
           selectedUser = contacts.isNotEmpty ? contacts[0].nickname : null;
-          messages.clear();
         });
       } else {
         setState(() {
@@ -329,6 +343,7 @@ class _HomePageState extends State<HomePage> {
           Message newMessage = Message(sender: responseJson['sender'], receiver: responseJson['receiver'], content: "Your message", timestamp: msgTime, isRead: true);
           setState(() {
             messages.add(newMessage);
+            messagesToShow.add(newMessage);
             _messageController.clear();
           });
 
@@ -404,8 +419,13 @@ class _HomePageState extends State<HomePage> {
         print(stack);
       }
     }
+
     setState(() {
       messages.addAll(newMessages);
+      final matchedMessages = newMessages.where((msg) =>
+        msg.sender == selectedUser || msg.receiver == selectedUser
+      );
+      messagesToShow.addAll(matchedMessages);
       _messageController.clear();
     });
 
@@ -498,10 +518,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<String> decodeMessage(String senderNickname, String encryptedData) async {
     // 1. contacts listesinden sender'ın public key'i bulunuyor
-    final contactEntry = contacts.firstWhere(
-      (c) => c.nickname == senderNickname,
-      orElse: () => throw Exception('Gönderen bulunamadı: $senderNickname'),
-    );
+    final contactEntry = await getContactOrAdd(senderNickname);
 
     final senderPublicKeyBase64 = contactEntry.x25519PublicKey;
     final senderPublicKeyBytes = base64Decode(senderPublicKeyBase64);
@@ -576,7 +593,6 @@ class _HomePageState extends State<HomePage> {
     return await Future.wait(decryptFutures);
   }
 
-  // Helper fonksiyon: rastgele nonce üretimi
   Uint8List _generateNonce(int length) {
     final random = Random.secure();
     final bytes = List<int>.generate(length, (_) => random.nextInt(256));
@@ -594,7 +610,25 @@ class _HomePageState extends State<HomePage> {
     return Uint8List.fromList(signature.bytes);
   }
   
-  void addContact(String newNickname) async {
+  Future<Contact> getContactOrAdd(String senderNickname) async {
+    // 1. Kişi zaten var mı kontrol et
+    Contact? contactEntry = contacts.firstWhereOrNull((c) => c.nickname == senderNickname);
+
+    // 2. Yoksa kişiyi eklemeyi dene
+    if (contactEntry == null) {
+      await addContact(senderNickname);
+
+      // 3. Ekledikten sonra tekrar kontrol et
+      contactEntry = contacts.firstWhere(
+        (c) => c.nickname == senderNickname,
+        orElse: () => throw Exception('Gönderen bulunamadı: $senderNickname'),
+      );
+    }
+
+    return contactEntry;
+  }
+  
+  Future<void> addContact(String newNickname) async {
     final url = Uri.parse('https://localhost:7064/api/user/getKeysByNickname/$newNickname');
     try {
       final response = await http.get(
@@ -633,13 +667,15 @@ class _HomePageState extends State<HomePage> {
 
         contactList.add(newContactMap);
 
-        await file.writeAsString(jsonEncode(contactList), flush: true);
+        final encoder = const JsonEncoder.withIndent('  ');
+        final beautifiedJson = encoder.convert(contactList);
+        await file.writeAsString(beautifiedJson, flush: true);
 
         // ✅ Contact model nesnesi olarak da listeye ekleyelim
         final newContact = Contact.fromJson(newContactMap);
         setState(() {
           contacts.add(newContact);
-          selectedUser = newNickname;
+          selectedUser ??= newNickname;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -657,6 +693,22 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  List<ChatItem> buildChatItems(List<Message> messages) {
+    List<ChatItem> chatItems = [];
+    DateTime? lastDate;
+
+    for (var msg in messages) {
+      final msgDate = DateTime(msg.timestamp.year, msg.timestamp.month, msg.timestamp.day);
+
+      if (lastDate == null || msgDate.isAfter(lastDate)) {
+        chatItems.add(ChatItem.dateHeader(msgDate));
+        lastDate = msgDate;
+      }
+      chatItems.add(ChatItem.message(msg));
+    }
+    return chatItems;
+  }
+  
   void _showAddContactDialog() {
     _newContactController.clear();
     showDialog(
@@ -703,6 +755,7 @@ class _HomePageState extends State<HomePage> {
     final screenWidth = MediaQuery.of(context).size.width - 25;
     final sidebarWidth = screenWidth * 0.15;
     final chatWidth = screenWidth * 0.85;
+    final chatItems = buildChatItems(messagesToShow);
 
     return Scaffold(
       backgroundColor: Colors.grey[900],
@@ -796,7 +849,7 @@ class _HomePageState extends State<HomePage> {
                             onTap: () {
                               setState(() {
                                 selectedUser = nickname;
-                                //messages.clear(); // Seçim değişince mesajları temizle
+                                showMessages();
                               });
                             },
                           );
@@ -852,31 +905,65 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
 
-
                     Expanded(
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(10),
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) {
-                          return Align(
-                            alignment: Alignment.centerRight,
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.purple[400],
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                //messages[index],
-                                "",
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+  child: ListView.builder(
+    padding: const EdgeInsets.all(10),
+    itemCount: chatItems.length,
+    itemBuilder: (context, index) {
+      final item = chatItems[index];
+
+      if (item.dateHeader != null) {
+        // Tarih başlığı
+        final dateStr = DateFormat('dd MMMM yyyy').format(item.dateHeader!);
+        return Center(
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.grey[700],
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              dateStr,
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+            ),
+          ),
+        );
+      } else {
+        // Mesaj kutusu
+        final msg = item.message!;
+        final isMine = msg.sender == widget.nickname;
+        final timeText = "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}";
+
+        return Align(
+          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            decoration: BoxDecoration(
+              color: isMine ? Colors.purple[400] : Colors.blue[700],
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  msg.content,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  timeText,
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    },
+  ),
+),
 
                     const Divider(height: 1, color: Colors.white),
 
