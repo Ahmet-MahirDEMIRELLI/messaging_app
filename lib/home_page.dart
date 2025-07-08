@@ -117,9 +117,10 @@ class ChatItem {
 class _HomePageState extends State<HomePage> {
   List<Message> messages = [];
   List<Message> messagesToShow = [];
-  final TextEditingController _messageController = TextEditingController();
+  Map<String, int> unreadCounts = {};
   List<Contact> contacts = [];
-  String? selectedUser;  // Başlangıçta seçili kullanıcı yok
+  final TextEditingController _messageController = TextEditingController();
+  String? selectedUser;
   final TextEditingController _newContactController = TextEditingController();
   late Uint8List decryptedX25519;
   late Uint8List publicX25519;
@@ -127,6 +128,7 @@ class _HomePageState extends State<HomePage> {
   late Uint8List publicEd25519;
   DateTime lastMessageDateTime = DateTime(2000);
   Timer? _timer;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -139,6 +141,9 @@ class _HomePageState extends State<HomePage> {
     await _loadContacts();
     await _loadMessages();
     await getNewMessages();
+    setState(() {
+      unreadCounts = getUnreadCounts();
+    });
 
     if(selectedUser != null){
       showMessages();
@@ -154,6 +159,12 @@ class _HomePageState extends State<HomePage> {
       messagesToShow = messages.where((msg) =>
         msg.sender == selectedUser || msg.receiver == selectedUser
       ).toList();
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
     });
   }
 
@@ -187,7 +198,7 @@ class _HomePageState extends State<HomePage> {
       publicX25519 = base64Decode(jsonData["x25519PublicKey"]);
       publicEd25519 = base64Decode(jsonData["ed25519PublicKey"]);
       final salt = base64Decode(jsonData["salt"]);
-      final nonce = base64Decode(jsonData["nonce"]); // base64Encode ile kaydedildiği için
+      final nonce = base64Decode(jsonData["nonce"]);
 
       final key = pbkdf2(widget.password, salt);
 
@@ -195,10 +206,6 @@ class _HomePageState extends State<HomePage> {
         decryptedX25519 = decryptAESGCM(key, encryptedX25519, nonce);
         decryptedEd25519 = decryptAESGCM(key, encryptedEd25519, nonce);
       });
-
-      print("X25519 çözüldü: ${base64Encode(decryptedX25519)}");
-      print("Ed25519 çözüldü: ${base64Encode(decryptedEd25519)}");
-
     } catch (e) {
       print("Şifre çözme hatası: $e");
       if (mounted) {
@@ -225,7 +232,6 @@ class _HomePageState extends State<HomePage> {
 
         setState(() {
           contacts = loadedContacts;
-          selectedUser = contacts.isNotEmpty ? contacts[0].nickname : null;
         });
       } else {
         setState(() {
@@ -233,7 +239,6 @@ class _HomePageState extends State<HomePage> {
           selectedUser = null;
           messages.clear();
         });
-        print('Contacts dosyası bulunamadı.');
       }
     } catch (e) {
       print('Contacts dosyası okunurken hata: $e');
@@ -263,11 +268,8 @@ class _HomePageState extends State<HomePage> {
             lastMessageDateTime = messages[i].timestamp.add(const Duration(microseconds: 1));
           }
         }
-
-        print('Mesajlar yüklendi. (${messages.length} adet)');
       } 
       else {
-        print('Mesaj dosyası bulunamadı. Yeni mesaj listesi oluşturulacak.');
         setState(() {
           messages = [];
         });
@@ -401,12 +403,23 @@ class _HomePageState extends State<HomePage> {
   Future<void> processNewMessages(List<dynamic> responseJson) async {
     List<Message> newMessages = [];
     List<Message> encryptedMessages = [];
-
     for (var item in responseJson) {
       try {
         String decryptedContent = await decodeMessage(item['sender'], item['content']);
         DateTime msgTime = DateTime.parse(item['timestamp']);
-        Message newMessage = Message(sender: item['sender'], receiver: item['receiver'], content: decryptedContent, timestamp: msgTime, isRead: false);
+        Message newMessage = Message(sender: item['sender'], receiver: item['receiver'], content: decryptedContent, timestamp: msgTime, isRead: selectedUser == item['sender'] ? true : false);
+        if(!newMessage.isRead){
+          setState(() {
+            setState(() {
+              unreadCounts.update(
+                newMessage.sender,
+                (count) => count + 1,
+                ifAbsent: () => 1,
+              );
+            });
+          });
+        }
+
         newMessages.add(newMessage);
         Message encryptedMessage = newMessage.copyWith(content: item['content']);
         encryptedMessages.add(encryptedMessage);
@@ -414,7 +427,8 @@ class _HomePageState extends State<HomePage> {
         if (lastMessageDateTime.isBefore(msgTime)) {
           lastMessageDateTime = msgTime.add(const Duration(microseconds: 1));
         }
-      } catch (e, stack) {
+      } 
+      catch (e, stack) {
         print('Error decoding message from ${item['sender']}: $e');
         print(stack);
       }
@@ -447,7 +461,6 @@ class _HomePageState extends State<HomePage> {
       List<dynamic> existingMessages = [];
 
       if (!await file.exists()) {
-        print('Mesaj dosyası bulunamadı. Yeni dosya oluşturulacak.');
         await file.create(recursive: true);
         await file.writeAsString('[]', flush: true);
       }
@@ -465,9 +478,8 @@ class _HomePageState extends State<HomePage> {
       final encoder = const JsonEncoder.withIndent('  ');
       final beautifiedJson = encoder.convert(existingMessages);
       await file.writeAsString(beautifiedJson, flush: true);
-
-      print('${messagesToSave.length} mesaj başarıyla kaydedildi.');
-    } catch (e) {
+    } 
+    catch (e) {
       print('Mesaj kaydedilirken hata oluştu: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Mesaj kaydedilemedi: $e')),
@@ -675,7 +687,6 @@ class _HomePageState extends State<HomePage> {
         final newContact = Contact.fromJson(newContactMap);
         setState(() {
           contacts.add(newContact);
-          selectedUser ??= newNickname;
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -707,6 +718,78 @@ class _HomePageState extends State<HomePage> {
       chatItems.add(ChatItem.message(msg));
     }
     return chatItems;
+  }
+  
+  Map<String, int> getUnreadCounts() {
+    final Map<String, int> unreadCountMap = {};
+
+    for (var msg in messages) {
+      if (!msg.isRead) {
+        unreadCountMap.update(msg.sender, (count) => count + 1, ifAbsent: () => 1);
+      }
+    }
+
+    return unreadCountMap;
+  }
+
+  Future<void> markRead() async{
+    setState(() {
+      if (unreadCounts.containsKey(selectedUser)) {
+        unreadCounts.remove(selectedUser);
+      }
+    });
+
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final appDir = Directory('${dir.path}/messaging_app');
+      if (!await appDir.exists()) {
+        await appDir.create(recursive: true);
+      }
+
+      final file = File('${appDir.path}/messages_${widget.nickname}.json');
+
+      List<dynamic> existingMessages = [];
+
+      if (!await file.exists()) {
+        await file.create(recursive: true);
+        await file.writeAsString('[]', flush: true);
+      }
+
+      final content = await file.readAsString();
+      if (content.trim().isNotEmpty) {
+        existingMessages = jsonDecode(content);
+      }
+
+      // Sondan başa işle
+      for (var i = existingMessages.length - 1; i >= 0; i--) {
+        final msg = existingMessages[i];
+        
+        if (msg is Map<String, dynamic>) {
+          final isTargetMessage = msg['sender'] == selectedUser;
+
+          if (!isTargetMessage) continue;
+
+          if (msg['isRead'] == false) {
+            msg['isRead'] = true;
+          } 
+          else {
+            // İlk okunmuş mesaja ulaştıysan daha geriye gitmeye gerek yok
+            break;
+          }
+        }
+      }
+
+      // Dosyaya yaz
+      final encoder = const JsonEncoder.withIndent('  ');
+      final beautifiedJson = encoder.convert(existingMessages);
+      await file.writeAsString(beautifiedJson, flush: true);
+    } 
+    catch (e) {
+      print('Mesaj kaydedilirken hata oluştu: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mesaj kaydedilemedi: $e')),
+      );
+    }
   }
   
   void _showAddContactDialog() {
@@ -843,13 +926,16 @@ class _HomePageState extends State<HomePage> {
                           final contact = contacts[index];
                           final nickname = contact.nickname;
                           final isSelected = selectedUser == nickname;
+                          final unreadCount = unreadCounts[nickname] ?? 0;
                           return _HoverableUserItem(
                             nickname: nickname,
                             isSelected: isSelected,
+                            unreadCount: unreadCount,
                             onTap: () {
                               setState(() {
                                 selectedUser = nickname;
                                 showMessages();
+                                markRead();
                               });
                             },
                           );
@@ -878,7 +964,7 @@ class _HomePageState extends State<HomePage> {
               ),
 
               // Sağ Panel (%85)
-              Container(
+              SizedBox(
                 width: chatWidth,
                 child: Column(
                   children: [
@@ -906,64 +992,65 @@ class _HomePageState extends State<HomePage> {
                     ),
 
                     Expanded(
-  child: ListView.builder(
-    padding: const EdgeInsets.all(10),
-    itemCount: chatItems.length,
-    itemBuilder: (context, index) {
-      final item = chatItems[index];
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(10),
+                        itemCount: chatItems.length,
+                        controller: _scrollController,
+                        itemBuilder: (context, index) {
+                          final item = chatItems[index];
 
-      if (item.dateHeader != null) {
-        // Tarih başlığı
-        final dateStr = DateFormat('dd MMMM yyyy').format(item.dateHeader!);
-        return Center(
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.grey[700],
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              dateStr,
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
-            ),
-          ),
-        );
-      } else {
-        // Mesaj kutusu
-        final msg = item.message!;
-        final isMine = msg.sender == widget.nickname;
-        final timeText = "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}";
+                          if (item.dateHeader != null) {
+                            // Tarih başlığı
+                            final dateStr = DateFormat('dd MMMM yyyy').format(item.dateHeader!);
+                            return Center(
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(vertical: 12),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[700],
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  dateStr,
+                                  style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            );
+                          } else {
+                            // Mesaj kutusu
+                            final msg = item.message!;
+                            final isMine = msg.sender == widget.nickname;
+                            final timeText = "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}";
 
-        return Align(
-          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            decoration: BoxDecoration(
-              color: isMine ? Colors.purple[400] : Colors.blue[700],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  msg.content,
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  timeText,
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-    },
-  ),
-),
+                            return Align(
+                              alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isMine ? Colors.purple[400] : Colors.blue[700],
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      msg.content,
+                                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      timeText,
+                                      style: const TextStyle(color: Colors.white60, fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ),
 
                     const Divider(height: 1, color: Colors.white),
 
@@ -1019,11 +1106,13 @@ class _HoverableUserItem extends StatefulWidget {
   final String nickname;
   final bool isSelected;
   final VoidCallback? onTap;
+  final int unreadCount;
 
   const _HoverableUserItem({
     required this.nickname,
     this.isSelected = false,
     this.onTap,
+    this.unreadCount = 0,
   });
 
   @override
@@ -1052,9 +1141,26 @@ class _HoverableUserItemState extends State<_HoverableUserItem> {
         child: Container(
           color: bgColor,
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-          child: Text(
-            widget.nickname,
-            style: const TextStyle(color: Colors.white, fontSize: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                widget.nickname,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+              ),
+              if (widget.unreadCount != 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${widget.unreadCount}',
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+            ],
           ),
         ),
       ),
