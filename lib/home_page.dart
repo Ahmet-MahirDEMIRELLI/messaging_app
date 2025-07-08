@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'package:messaging_app/main_page.dart';
+import 'main_page.dart';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import 'dart:typed_data';
@@ -578,7 +577,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<List<Message>> decryptLoadedMessages(List<dynamic> jsonData) async {
     final List<Future<Message>> decryptFutures = jsonData.map((item) async {
-      var decryptedContent;
+      String decryptedContent;
       if(item['sender'] != widget.nickname){
         decryptedContent = await decodeMessage(item['sender'], item['content']);
       }
@@ -597,7 +596,7 @@ class _HomePageState extends State<HomePage> {
         receiver: item['receiver'],
         content: decryptedContent,
         timestamp: DateTime.parse(item['timestamp']),
-        isRead: item['read_status'] ?? false,
+        isRead: item['isRead'] ?? false,
       );
     }).toList();
 
@@ -792,6 +791,56 @@ class _HomePageState extends State<HomePage> {
     }
   }
   
+  String getTurkishDate(DateTime? dateTime){
+    if (dateTime == null) return '';
+  
+    int day = dateTime.day;
+    int month = dateTime.month;
+    int year = dateTime.year;
+    String monthTurkish = "";
+
+    switch(month){
+      case 1:
+        monthTurkish = "Ocak";
+        break;
+      case 2:
+        monthTurkish = "Şubat";
+        break;
+      case 3:
+        monthTurkish = "Mart";
+        break;
+      case 4:
+        monthTurkish = "Nisan";
+        break;
+      case 5:
+        monthTurkish = "Mayıs";
+        break;
+      case 6:
+        monthTurkish = "Haziran";
+        break;
+      case 7:
+        monthTurkish = "Temmuz";
+        break;
+      case 8:
+        monthTurkish = "Ağustos";
+        break;
+      case 9:
+        monthTurkish = "Eylül";
+        break;
+      case 10:
+        monthTurkish = "Ekim";
+        break;
+      case 11:
+        monthTurkish = "Kasım";
+        break;
+      case 12:
+        monthTurkish = "Aralık";
+        break;
+    }
+
+    return '$day $monthTurkish $year';
+  }
+  
   void _showAddContactDialog() {
     _newContactController.clear();
     showDialog(
@@ -855,7 +904,7 @@ class _HomePageState extends State<HomePage> {
           backgroundColor: Colors.transparent,
           elevation: 0,
           title: Text(
-            'Welcome, ${widget.nickname}',
+            'Hoşgeldin ${widget.nickname}',
             style: const TextStyle(color: Colors.white),
           ),
           iconTheme: const IconThemeData(color: Colors.white),
@@ -904,7 +953,7 @@ class _HomePageState extends State<HomePage> {
                     const Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 12.0),
                       child: Text(
-                        'Your Contacts',
+                        'Kişileriniz',
                         style: TextStyle(
                           color: Colors.white70,
                           fontSize: 20,
@@ -948,7 +997,7 @@ class _HomePageState extends State<HomePage> {
                       child: ElevatedButton.icon(
                         icon: const Icon(Icons.person_add),
                         label: const Text(
-                          'Add Contact',
+                          'Kişi Ekle',
                           style: TextStyle(color: Colors.white),
                         ),
                         style: ElevatedButton.styleFrom(
@@ -982,7 +1031,7 @@ class _HomePageState extends State<HomePage> {
                         ),
                       ),
                       child: Text(
-                        selectedUser != null ? 'Chat with $selectedUser' : 'No contact selected',
+                        selectedUser != null ? '$selectedUser' : 'Kişi seçilmedi',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 18,
@@ -1001,7 +1050,7 @@ class _HomePageState extends State<HomePage> {
 
                           if (item.dateHeader != null) {
                             // Tarih başlığı
-                            final dateStr = DateFormat('dd MMMM yyyy').format(item.dateHeader!);
+                            final dateStr = getTurkishDate(item.dateHeader);
                             return Center(
                               child: Container(
                                 margin: const EdgeInsets.symmetric(vertical: 12),

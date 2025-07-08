@@ -18,8 +18,6 @@ class _MainPageState extends State<MainPage> {
   void _handleLogin() {
     final nickname = _nicknameController.text.trim();
     final password = _passwordController.text.trim();
-    print("Nickname: '$nickname'");
-    print("Password: '$password'");
 
     if (nickname.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -50,7 +48,7 @@ class _MainPageState extends State<MainPage> {
               const Padding(
                 padding: EdgeInsets.only(bottom: 24),
                 child: Text(
-                  'Messaging App',
+                  'Whispr',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 28,

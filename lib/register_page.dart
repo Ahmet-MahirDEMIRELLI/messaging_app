@@ -3,9 +3,8 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/services.dart';
-import 'package:messaging_app/main_page.dart';
+import 'main_page.dart';
 import 'package:pointycastle/export.dart' as pc;
-import 'dart:typed_data';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -24,7 +23,7 @@ class _RegisterPageState extends State<RegisterPage> {
     final nickname = _nicknameController.text.trim();
     if (nickname.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nickname boş olamaz!')),
+        const SnackBar(content: Text('Kullanıcı Adı boş olamaz!')),
       );
       return;
     }
@@ -274,7 +273,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     controller: _nicknameController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      hintText: 'Nickname',
+                      hintText: 'Kullanıcı Adı',
                       hintStyle: const TextStyle(color: Colors.white54),
                       filled: true,
                       fillColor: Colors.grey[800],
