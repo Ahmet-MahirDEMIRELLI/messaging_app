@@ -20,7 +20,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final TextEditingController _nicknameController = TextEditingController();
 
   void _handleRegister() async {
-    final nickname = _nicknameController.text.trim();
+    final nickname = _nicknameController.text.trim().toLowerCase();
     if (nickname.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Kullanıcı Adı boş olamaz!')),

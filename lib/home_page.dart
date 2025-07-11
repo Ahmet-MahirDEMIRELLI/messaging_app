@@ -439,7 +439,6 @@ class _HomePageState extends State<HomePage> {
         msg.sender == selectedUser || msg.receiver == selectedUser
       );
       messagesToShow.addAll(matchedMessages);
-      _messageController.clear();
     });
 
     if (encryptedMessages.isNotEmpty) {
