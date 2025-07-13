@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'register_page.dart';
 import 'home_page.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -12,10 +13,47 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> {
   final TextEditingController _nicknameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-
+  final _secureStorage = const FlutterSecureStorage();
   bool rememberMe = false;
 
-  void _handleLogin() {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      loadSavedCredentials();
+    });
+  }
+
+  Future<void> loadSavedCredentials() async {
+    final nickname = await _secureStorage.read(key: 'nickname');
+    final password = await _secureStorage.read(key: 'password');
+    final savedTimeStr = await _secureStorage.read(key: 'saved_time');
+
+    if (nickname != null && password != null && savedTimeStr != null) {
+      final savedTime = DateTime.fromMillisecondsSinceEpoch(int.parse(savedTimeStr));
+      if (DateTime.now().difference(savedTime).inDays <= 30) {
+        _nicknameController.text = nickname;
+        _passwordController.text = password;
+        setState(() {
+          rememberMe = true;
+        });
+      } 
+      else {
+        await _secureStorage.delete(key: 'nickname');
+        await _secureStorage.delete(key: 'password');
+        await _secureStorage.delete(key: 'saved_time');
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _nicknameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleLogin() async{
     final nickname = _nicknameController.text.trim();
     final password = _passwordController.text.trim();
 
@@ -24,6 +62,15 @@ class _MainPageState extends State<MainPage> {
         const SnackBar(content: Text('Kullanıcı adı ve şifre boş olamaz!')),
       );
       return;
+    }
+
+    if (rememberMe) {
+      await _secureStorage.write(key: 'nickname', value: nickname);
+      await _secureStorage.write(key: 'password', value: password);
+      await _secureStorage.write(
+        key: 'saved_time',
+        value: DateTime.now().millisecondsSinceEpoch.toString(),
+      );
     }
 
     Navigator.pushReplacement(
@@ -109,27 +156,37 @@ class _MainPageState extends State<MainPage> {
                         style: TextStyle(color: Colors.white),
                       ),
                       value: rememberMe,
-                      onChanged: (bool? value) {
-                        if (value == true) {
-                          showDialog(
+                      onChanged: (bool? value) async {
+                        if (value == true && !rememberMe) {
+                          final accepted = await showDialog<bool>(
                             context: context,
                             builder: (context) => AlertDialog(
                               title: const Text('Uyarı'),
-                              content: const Text('Bu işlem güvenliğiniz açısından önerilmemektedir.'),
+                              content: const Text(
+                                'Bu işlem güvenliğiniz açısından önerilmemektedir.',
+                              ),
                               actions: [
                                 TextButton(
-                                  onPressed: () {
-                                    Navigator.of(context).pop();
-                                  },
+                                  onPressed: () => Navigator.of(context).pop(false),
+                                  child: const Text('Vazgeç'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(true),
                                   child: const Text('Riskin bana ait olduğunu kabul ediyorum.'),
                                 ),
                               ],
                             ),
                           );
+                          if (accepted == true) {
+                            setState(() {
+                              rememberMe = true;
+                            });
+                          }
+                        } else {
+                          setState(() {
+                            rememberMe = value ?? false;
+                          });
                         }
-                        setState(() {
-                          rememberMe = value ?? false;
-                        });
                       },
                       controlAffinity: ListTileControlAffinity.leading,
                     ),
