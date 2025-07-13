@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'register_page.dart';
 import 'home_page.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -85,6 +86,10 @@ class _MainPageState extends State<MainPage> {
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
 
+    double contentWidth = defaultTargetPlatform == TargetPlatform.android
+        ? screenWidth * 0.8
+        : screenWidth * 0.4;
+
     return Scaffold(
       backgroundColor: Colors.grey[900],
       body: Center(
@@ -104,7 +109,7 @@ class _MainPageState extends State<MainPage> {
                 ),
               ),
               Container(
-                width: screenWidth * 0.4,
+                width: contentWidth,
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
                   color: Colors.grey[900],

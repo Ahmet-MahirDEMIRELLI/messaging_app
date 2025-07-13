@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:cryptography/cryptography.dart';
 import 'dart:math';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 
 class HomePage extends StatefulWidget {
   final String nickname;
@@ -125,7 +126,7 @@ class _HomePageState extends State<HomePage> {
   late Uint8List publicX25519;
   late Uint8List decryptedEd25519;
   late Uint8List publicEd25519;
-  DateTime lastMessageDateTime = DateTime(2000);
+  DateTime lastMessageDateTime = DateTime(2000).toUtc().add(const Duration(hours: 3));
   Timer? _timer;
   final ScrollController _scrollController = ScrollController();
 
@@ -330,7 +331,7 @@ class _HomePageState extends State<HomePage> {
       };
 
 
-      final url = Uri.parse('https://localhost:7064/api/message/sendMessage');
+      final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/message/sendMessage');
       try {
         final response = await http.post(
           url,
@@ -376,7 +377,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> getNewMessages() async{
-    final url = Uri.parse('https://localhost:7064/api/message/getNewMessages/${widget.nickname}/${lastMessageDateTime.toIso8601String()}');
+    final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/message/getNewMessages/${widget.nickname}/${lastMessageDateTime.toIso8601String()}');
     try {
       final response = await http.get(
         url,
@@ -405,7 +406,7 @@ class _HomePageState extends State<HomePage> {
     for (var item in responseJson) {
       try {
         String decryptedContent = await decodeMessage(item['sender'], item['content']);
-        DateTime msgTime = DateTime.parse(item['timestamp']);
+        DateTime msgTime = DateTime.parse(item['timestamp']).toUtc().add(const Duration(hours: 3));
         Message newMessage = Message(sender: item['sender'], receiver: item['receiver'], content: decryptedContent, timestamp: msgTime, isRead: selectedUser == item['sender'] ? true : false);
         if(!newMessage.isRead){
           setState(() {
@@ -584,7 +585,6 @@ class _HomePageState extends State<HomePage> {
         decryptedContent = "Your message";
       }
 
-      // lastMessageDateTime
       DateTime msgTime = DateTime.parse(item['timestamp']);
       if (lastMessageDateTime.isBefore(msgTime)) {
         lastMessageDateTime = msgTime.add(const Duration(microseconds: 1));
@@ -639,7 +639,7 @@ class _HomePageState extends State<HomePage> {
   }
   
   Future<void> addContact(String newNickname) async {
-    final url = Uri.parse('https://localhost:7064/api/user/getKeysByNickname/$newNickname');
+    final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/user/getKeysByNickname/$newNickname');
     try {
       final response = await http.get(
         url,
@@ -789,6 +789,41 @@ class _HomePageState extends State<HomePage> {
       );
     }
   }
+
+  Future<void> _clearMessages() async {
+    setState(() {
+      // selectedUser olan mesajları filtrele, sadece diğer mesajları bırak
+      messages = messages.where((msg) =>
+        msg.sender != selectedUser && msg.receiver != selectedUser
+      ).toList();
+
+      messagesToShow = [];
+    });
+
+    // Güncellenmiş mesajları dosyaya kaydet
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final appDir = Directory('${dir.path}/messaging_app');
+      final file = File('${appDir.path}/messages_${widget.nickname}.json');
+
+      if (await file.exists()) {
+        // messages listesini json'a çevirip yaz
+        final jsonStr = jsonEncode(messages.map((m) => m.toJson()).toList());
+        await file.writeAsString(jsonStr);
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Seçili kişiyle olan mesajlar temizlendi.')),
+      );
+    } catch (e) {
+      print('Mesajlar temizlenirken hata: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mesajlar temizlenirken hata oluştu: $e')),
+      );
+    }
+  }
+
+
   
   String getTurkishDate(DateTime? dateTime){
     if (dateTime == null) return '';
@@ -884,45 +919,51 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width - 25;
-    final sidebarWidth = screenWidth * 0.15;
-    final chatWidth = screenWidth * 0.85;
+    final isMobile = screenWidth < 600;
+    double contentWidth = defaultTargetPlatform == TargetPlatform.android
+        ? screenWidth * 0.95
+        : screenWidth * 0.8;
+    final sidebarWidth = isMobile ? contentWidth : contentWidth * 0.15;
+    final chatWidth = isMobile ? contentWidth : contentWidth * 0.85;
     final chatItems = buildChatItems(messagesToShow);
+
+    bool showChat = selectedUser != null;
 
     return Scaffold(
       backgroundColor: Colors.grey[900],
       appBar: PreferredSize(
-      preferredSize: const Size.fromHeight(kToolbarHeight),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF212121), // Colors.grey[900]
-          border: Border(
-            bottom: BorderSide(color: const Color.fromARGB(255, 139, 3, 105), width: 1),
-          ),
-        ),
-        child: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          title: Text(
-            'Hoşgeldin ${widget.nickname}',
-            style: const TextStyle(color: Colors.white),
-          ),
-          iconTheme: const IconThemeData(color: Colors.white),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.logout),
-              tooltip: 'Çıkış Yap',
-              onPressed: () {
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (context) => const MainPage()),
-                  (route) => false,
-                );
-              },
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF212121),
+            border: Border(
+              bottom: BorderSide(color: Color.fromARGB(255, 139, 3, 105), width: 1),
             ),
-          ],
+          ),
+          child: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            title: Text(
+              'Hoşgeldin ${widget.nickname}',
+              style: const TextStyle(color: Colors.white),
+            ),
+            iconTheme: const IconThemeData(color: Colors.white),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.logout),
+                tooltip: 'Çıkış Yap',
+                onPressed: () {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (context) => const MainPage()),
+                    (route) => false,
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
-    ),
       body: Padding(
         padding: const EdgeInsets.all(10),
         child: Container(
@@ -931,224 +972,269 @@ class _HomePageState extends State<HomePage> {
             border: Border.all(color: Colors.grey, width: 2),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Row(
-            children: [
-              // 🔵 Sol Panel (%15)
-              Container(
-                width: sidebarWidth,
-                decoration: BoxDecoration(
-                  color: Colors.grey[800],
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(12),
-                    bottomLeft: Radius.circular(12),
-                  ),
-                  border: const Border(
-                    right: BorderSide(color: Colors.white, width: 1),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: isMobile
+              ? (!showChat
+                  ? _buildSidebar(sidebarWidth)
+                  : _buildChat(chatWidth, chatItems))
+              : Row(
                   children: [
-                    const Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 12.0),
-                      child: Text(
-                        'Kişileriniz',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const Divider(color: Colors.deepPurple, thickness: 1),
-                    Expanded(
-                      child: ListView.separated(
-                        padding: EdgeInsets.zero,
-                        itemCount: contacts.length,
-                        separatorBuilder: (context, index) => const Divider(
-                          color: Colors.deepPurple,
-                          height: 1,
-                          thickness: 1,
-                        ),
-                        itemBuilder: (context, index) {
-                          final contact = contacts[index];
-                          final nickname = contact.nickname;
-                          final isSelected = selectedUser == nickname;
-                          final unreadCount = unreadCounts[nickname] ?? 0;
-                          return _HoverableUserItem(
-                            nickname: nickname,
-                            isSelected: isSelected,
-                            unreadCount: unreadCount,
-                            onTap: () {
-                              setState(() {
-                                selectedUser = nickname;
-                                showMessages();
-                                markRead();
-                              });
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(8),
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.person_add),
-                        label: const Text(
-                          'Kişi Ekle',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color.fromARGB(255, 30, 126, 210),
-                          iconColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                        onPressed: () => _showAddContactDialog(),
-                      ),
-                    ),
+                    _buildSidebar(sidebarWidth),
+                    _buildChat(chatWidth, chatItems),
                   ],
                 ),
-              ),
-
-              // Sağ Panel (%85)
-              SizedBox(
-                width: chatWidth,
-                child: Column(
-                  children: [
-                    // Seçili kişinin nickname gösteren üst şerit
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 11.25, horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: const BorderRadius.only(
-                          topRight: Radius.circular(12),
-                        ),
-                        border: const Border(
-                          bottom: BorderSide(color: Colors.white, width: 1),
-                        ),
-                      ),
-                      child: Text(
-                        selectedUser != null ? '$selectedUser' : 'Kişi seçilmedi',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-
-                    Expanded(
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(10),
-                        itemCount: chatItems.length,
-                        controller: _scrollController,
-                        itemBuilder: (context, index) {
-                          final item = chatItems[index];
-
-                          if (item.dateHeader != null) {
-                            // Tarih başlığı
-                            final dateStr = getTurkishDate(item.dateHeader);
-                            return Center(
-                              child: Container(
-                                margin: const EdgeInsets.symmetric(vertical: 12),
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[700],
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Text(
-                                  dateStr,
-                                  style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                            );
-                          } else {
-                            // Mesaj kutusu
-                            final msg = item.message!;
-                            final isMine = msg.sender == widget.nickname;
-                            final timeText = "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}";
-
-                            return Align(
-                              alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-                              child: Container(
-                                padding: const EdgeInsets.all(12),
-                                margin: const EdgeInsets.symmetric(vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: isMine ? Colors.purple[400] : Colors.blue[700],
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text(
-                                      msg.content,
-                                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      timeText,
-                                      style: const TextStyle(color: Colors.white60, fontSize: 12),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }
-                        },
-                      ),
-                    ),
-
-                    const Divider(height: 1, color: Colors.white),
-
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _messageController,
-                              enabled: selectedUser != null,
-                              style: TextStyle(
-                                color: selectedUser != null ? Colors.white : Colors.white54,
-                              ),
-                              decoration: InputDecoration(
-                                hintText: selectedUser != null
-                                    ? 'Mesaj yaz...'
-                                    : 'Select a contact first',
-                                hintStyle: TextStyle(color: Colors.white54),
-                                filled: true,
-                                fillColor: Colors.grey[800],
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide.none,
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            icon: Icon(
-                              Icons.send,
-                              color: selectedUser != null ? Colors.white : Colors.white38,
-                            ),
-                            onPressed: selectedUser != null ? sendMessage : null,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
+
+  Widget _buildSidebar(double width) {
+    return Container(
+      width: width,
+      decoration: BoxDecoration(
+        color: Colors.grey[800],
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(12),
+          bottomLeft: Radius.circular(12),
+        ),
+        border: const Border(
+          right: BorderSide(color: Colors.white, width: 1),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6.0, horizontal: 12.0),
+            child: Text(
+              'Kişileriniz',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const Divider(color: Colors.deepPurple, thickness: 1),
+          Expanded(
+            child: ListView.separated(
+              padding: EdgeInsets.zero,
+              itemCount: contacts.length,
+              separatorBuilder: (context, index) => const Divider(
+                color: Colors.deepPurple,
+                height: 1,
+                thickness: 1,
+              ),
+              itemBuilder: (context, index) {
+                final contact = contacts[index];
+                final nickname = contact.nickname;
+                final isSelected = selectedUser == nickname;
+                final unreadCount = unreadCounts[nickname] ?? 0;
+                return _HoverableUserItem(
+                  nickname: nickname,
+                  isSelected: isSelected,
+                  unreadCount: unreadCount,
+                  onTap: () {
+                    setState(() {
+                      selectedUser = nickname;
+                      showMessages();
+                      markRead();
+                    });
+                  },
+                );
+              },
+            ),
+          ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(8),
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.person_add),
+              label: const Text(
+                'Kişi Ekle',
+                style: TextStyle(color: Colors.white),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color.fromARGB(255, 30, 126, 210),
+                iconColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () => _showAddContactDialog(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChat(double width, List<ChatItem> chatItems) {
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
+    return SizedBox(
+      width: width,
+      child: Column(
+        children: [
+          // Başlık kısmı - mobilde geri butonu göster
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 11.25, horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.grey[850],
+              borderRadius: isMobile
+                  ? const BorderRadius.only(
+                      topRight: Radius.circular(12),
+                      topLeft: Radius.circular(12),
+                    )
+                  : const BorderRadius.only(
+                      topRight: Radius.circular(12),
+                    ),
+              border: const Border(
+                bottom: BorderSide(color: Colors.white, width: 1),
+              ),
+            ),
+            child: Row(
+              children: [
+                if (isMobile)
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () {
+                      setState(() {
+                        selectedUser = null;  // Geri dönmek için seçili kullanıcıyı kaldır
+                      });
+                    },
+                  ),
+                Expanded(
+                  child: Text(
+                    selectedUser ?? 'Kişi seçilmedi',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+
+                // Yeni: sağa dikey üç nokta menüsü
+                if (selectedUser != null)
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, color: Colors.white),
+                    onSelected: (value) {
+                      if (value == 'clear_messages') {
+                        _clearMessages();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem<String>(
+                        value: 'clear_messages',
+                        child: Text('Mesajları Temizle'),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(10),
+              itemCount: chatItems.length,
+              controller: _scrollController,
+              itemBuilder: (context, index) {
+                final item = chatItems[index];
+                if (item.dateHeader != null) {
+                  final dateStr = getTurkishDate(item.dateHeader);
+                  return Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[700],
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        dateStr,
+                        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  );
+                } else {
+                  final msg = item.message!;
+                  final isMine = msg.sender == widget.nickname;
+                  final timeText =
+                      "${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}";
+
+                  return Align(
+                    alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isMine ? Colors.purple[400] : Colors.blue[700],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            msg.content,
+                            style: const TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            timeText,
+                            style: const TextStyle(color: Colors.white60, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+
+          const Divider(height: 1, color: Colors.white),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    enabled: selectedUser != null,
+                    style: TextStyle(
+                      color: selectedUser != null ? Colors.white : Colors.white54,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: selectedUser != null ? 'Mesaj yaz...' : 'Select a contact first',
+                      hintStyle: TextStyle(color: Colors.white54),
+                      filled: true,
+                      fillColor: Colors.grey[800],
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Icon(
+                    Icons.send,
+                    color: selectedUser != null ? Colors.white : Colors.white38,
+                  ),
+                  onPressed: selectedUser != null ? sendMessage : null,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
 }
+
 
 class _HoverableUserItem extends StatefulWidget {
   final String nickname;

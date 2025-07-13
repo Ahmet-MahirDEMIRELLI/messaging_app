@@ -8,6 +8,7 @@ import 'package:pointycastle/export.dart' as pc;
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -29,7 +30,7 @@ class _RegisterPageState extends State<RegisterPage> {
     }
 
     final keys = await createKeyPair();
-    final url = Uri.parse('https://localhost:7064/api/user/createUser');
+    final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/user/createUser');
     final createUserDto = {
       'nickname': nickname,
       'x25519PublicKey': keys['x25519PublicKey'],
@@ -44,46 +45,38 @@ class _RegisterPageState extends State<RegisterPage> {
       );
 
       if (response.statusCode == 201) {
-
         print('Kullanıcı başarıyla oluşturuldu.');
 
-        // 1. Güçlü şifre oluştur
         final password = generateStrongPassword(32);
 
-        // 2. Private key'i byte dizisine çevir
         final ed25519PrivateKeyBase64 = keys['ed25519PrivateKey'];
         if (ed25519PrivateKeyBase64 == null) {
-          // Hata yönetimi
           throw Exception('ed25519PrivateKey null olamaz!');
         }
         final ed25519PrivateKeyBytes = base64Decode(ed25519PrivateKeyBase64);
 
         final x25519PrivateKeyBase64 = keys['x25519PrivateKey'];
         if (x25519PrivateKeyBase64 == null) {
-          // Hata yönetimi
           throw Exception('x25519PrivateKey null olamaz!');
         }
         final x25519PrivateKeyBytes = base64Decode(x25519PrivateKeyBase64);
 
-        // 3. Şifreleme için rastgele nonce üret (12 byte)
         final nonce = Uint8List(12);
         final random = Random.secure();
         for (int i = 0; i < nonce.length; i++) {
           nonce[i] = random.nextInt(256);
         }
 
-        // 4. Password'u 32 byte key'e dönüştürmek için PBKDF2 uygula (salt da random olmalı)
         final salt = Uint8List(16);
         for (int i = 0; i < salt.length; i++) {
           salt[i] = random.nextInt(256);
         }
+
         final key = pbkdf2(password, salt);
 
-        // 5. Private key'i AES-GCM ile şifrele
         final encryptedX25519PrivateKey = encryptAESGCM(key, x25519PrivateKeyBytes, nonce);
         final encryptedEd25519PrivateKey = encryptAESGCM(key, ed25519PrivateKeyBytes, nonce);
 
-        // 6. Şifrelenmiş veriyi ve nonce+salt'ı JSON yapısında sakla
         final saveData = jsonEncode({
           'nickname': nickname,
           'x25519PublicKey': keys['x25519PublicKey'],
@@ -94,10 +87,8 @@ class _RegisterPageState extends State<RegisterPage> {
           'salt': base64Encode(salt),
         });
 
-        // 7. Dosya yolunu al ve dosyaya yaz (örnek: private_key.json)
         final dir = await getApplicationDocumentsDirectory();
         final appDir = Directory('${dir.path}/messaging_app');
-
         if (!await appDir.exists()) {
           await appDir.create(recursive: true);
         }
@@ -105,12 +96,10 @@ class _RegisterPageState extends State<RegisterPage> {
         final file = File('${appDir.path}/keys_${nickname}.json');
         await file.writeAsString(saveData);
 
-        // 8. Kullanıcıya şifreyi göster ve saklamasını söyle
         showDialog(
           context: context,
           builder: (context) {
-            bool copied = false; // Buton durumu için değişken
-
+            bool copied = false;
             return StatefulBuilder(
               builder: (context, setState) {
                 return AlertDialog(
@@ -125,15 +114,17 @@ class _RegisterPageState extends State<RegisterPage> {
                       ),
                       const SizedBox(height: 12),
                       ElevatedButton.icon(
-                        onPressed: copied ? null : () {
-                          Clipboard.setData(ClipboardData(text: password));
-                          setState(() {
-                            copied = true;
-                          });
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Şifre kopyalandı!')),
-                          );
-                        },
+                        onPressed: copied
+                            ? null
+                            : () {
+                                Clipboard.setData(ClipboardData(text: password));
+                                setState(() {
+                                  copied = true;
+                                });
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Şifre kopyalandı!')),
+                                );
+                              },
                         icon: const Icon(Icons.copy),
                         label: Text(copied ? 'Kopyalandı!' : 'Kopyala'),
                       ),
@@ -142,7 +133,7 @@ class _RegisterPageState extends State<RegisterPage> {
                   actions: [
                     TextButton(
                       onPressed: () {
-                        Navigator.pop(context); // Dialogu kapat
+                        Navigator.pop(context);
                         Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(builder: (context) => const MainPage()),
@@ -160,26 +151,21 @@ class _RegisterPageState extends State<RegisterPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Kayıt olunuyor: $nickname')),
         );
-
       } else {
-        // Hata mesajı göster
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Kayıt başarısız: Kullanıcı adı geçersiz.')),
         );
-        return;
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Sunucu bağlantı hatası: $e')),
       );
-      return;
     }
   }
 
-  // PBKDF2 fonksiyonu
   Uint8List pbkdf2(String password, Uint8List salt) {
     final derivator = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA256Digest(), 64));
-    final params = pc.Pbkdf2Parameters(salt, 10000, 32); // 10k iterasyon, 32 byte key
+    final params = pc.Pbkdf2Parameters(salt, 10000, 32);
     derivator.init(params);
     return derivator.process(utf8.encode(password));
   }
@@ -201,17 +187,14 @@ class _RegisterPageState extends State<RegisterPage> {
     final x25519 = X25519();
     final ed25519 = Ed25519();
 
-    // X25519 anahtar çifti oluştur
     final xKeyPair = await x25519.newKeyPair();
     final xPublicKey = await xKeyPair.extractPublicKey();
     final xPrivateKeyBytes = await xKeyPair.extractPrivateKeyBytes();
 
-    // Ed25519 anahtar çifti oluştur
     final edKeyPair = await ed25519.newKeyPair();
     final edPublicKey = await edKeyPair.extractPublicKey();
     final edPrivateKeyBytes = await edKeyPair.extractPrivateKeyBytes();
 
-    // Base64 encode et
     return {
       'x25519PublicKey': base64Encode(xPublicKey.bytes),
       'x25519PrivateKey': base64Encode(xPrivateKeyBytes),
@@ -223,6 +206,9 @@ class _RegisterPageState extends State<RegisterPage> {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
+    double contentWidth = defaultTargetPlatform == TargetPlatform.android
+        ? screenWidth * 0.8
+        : screenWidth * 0.4;
 
     return Scaffold(
       backgroundColor: Colors.grey[900],
@@ -249,20 +235,20 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ),
             Container(
-              width: screenWidth * 0.4,
+              width: contentWidth,
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: Colors.grey[850],
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: const Color.fromARGB(255, 139, 3, 105),
+                  color: Color.fromARGB(255, 139, 3, 105),
                   width: 2,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color.fromARGB(255, 139, 3, 105).withOpacity(0.3),
+                    color: Color.fromARGB(255, 139, 3, 105).withOpacity(0.3),
                     blurRadius: 12,
-                    offset: const Offset(0, 6),
+                    offset: Offset(0, 6),
                   ),
                 ],
               ),
