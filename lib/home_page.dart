@@ -332,7 +332,7 @@ class _HomePageState extends State<HomePage> {
       };
 
 
-      final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/message/sendMessage');
+      final url = Uri.parse('https://localhost/api/message/sendMessage');
       try {
         final response = await http.post(
           url,
@@ -378,7 +378,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> getNewMessages() async{
-    final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/message/getNewMessages/${widget.nickname}/${lastMessageDateTime.toIso8601String()}');
+    final url = Uri.parse('https://localhost/api/message/getNewMessages/${widget.nickname}/${lastMessageDateTime.toIso8601String()}');
     try {
       final response = await http.get(
         url,
@@ -640,7 +640,7 @@ class _HomePageState extends State<HomePage> {
   }
   
   Future<void> addContact(String newNickname) async {
-    final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/user/getKeysByNickname/$newNickname');
+    final url = Uri.parse('https://localhost/api/user/getKeysByNickname/$newNickname');
     try {
       final response = await http.get(
         url,

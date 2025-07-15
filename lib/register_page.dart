@@ -30,7 +30,7 @@ class _RegisterPageState extends State<RegisterPage> {
     }
 
     final keys = await createKeyPair();
-    final url = Uri.parse('https://whisprapi.ahmetmahirdemirelli.com/api/user/createUser');
+    final url = Uri.parse('https://localhost/api/user/createUser');
     final createUserDto = {
       'nickname': nickname,
       'x25519PublicKey': keys['x25519PublicKey'],
