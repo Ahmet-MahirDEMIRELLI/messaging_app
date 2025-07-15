@@ -3,6 +3,9 @@ import 'register_page.dart';
 import 'home_page.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -47,6 +50,40 @@ class _MainPageState extends State<MainPage> {
     }
   }
 
+  Future<void> _importAccountJson() async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bu özellik yalnızca Android\'de kullanılabilir.')),
+      );
+      return;
+    }
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+
+    if (result != null && result.files.single.path != null) {
+      final importedFile = File(result.files.single.path!);
+      final content = await importedFile.readAsString();
+
+      final fileName = result.files.single.name;
+      final dir = await getApplicationDocumentsDirectory();
+      final appDir = Directory('${dir.path}/messaging_app');
+
+      if (!await appDir.exists()) {
+        await appDir.create(recursive: true);
+      }
+
+      final newFile = File('${appDir.path}/$fileName');
+      await newFile.writeAsString(content);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Hesap dosyası "$fileName" başarıyla içe aktarıldı.')),
+      );
+    }
+  }
+  
   @override
   void dispose() {
     _nicknameController.dispose();
@@ -229,6 +266,22 @@ class _MainPageState extends State<MainPage> {
                         ),
                       ),
                     ),
+                    if (defaultTargetPlatform == TargetPlatform.android)
+                      const SizedBox(height: 8),
+                    if (defaultTargetPlatform == TargetPlatform.android)
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: _importAccountJson,
+                          child: const Text(
+                            'Hesabınızı içe aktarın',
+                            style: TextStyle(
+                              color: Colors.blueAccent,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),

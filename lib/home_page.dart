@@ -11,6 +11,7 @@ import 'package:cryptography/cryptography.dart';
 import 'dart:math';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:media_store_plus/media_store_plus.dart';
 
 class HomePage extends StatefulWidget {
   final String nickname;
@@ -822,8 +823,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
   }
-
-
   
   String getTurkishDate(DateTime? dateTime){
     if (dateTime == null) return '';
@@ -880,18 +879,18 @@ class _HomePageState extends State<HomePage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add New Contact'),
+        title: const Text('Yeni Kişi Ekle'),
         content: TextField(
           controller: _newContactController,
           decoration: const InputDecoration(
-            labelText: 'Nickname',
-            hintText: 'Enter new contact nickname',
+            labelText: 'Kullanıcı adı',
+            hintText: 'Yeni kişinin kullanıcı adını giriniz',
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            child: const Text('İptal'),
           ),
           ElevatedButton(
             onPressed: () {
@@ -901,11 +900,41 @@ class _HomePageState extends State<HomePage> {
                 Navigator.of(context).pop();
               }
             },
-            child: const Text('Add'),
+            child: const Text('Ekle'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> saveToDownloadWithMediaStore() async {
+    await MediaStore.ensureInitialized();
+    MediaStore.appFolder = "messaging_app";
+    final mediaStore = MediaStore();
+
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final sourceFile = File('${appDir.path}/messaging_app/keys_${widget.nickname}.json');
+
+      if (!await sourceFile.exists()) {
+        print("❌ Kaynak dosya bulunamadı: ${sourceFile.path}");
+        return;
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final tempFilePath = '${tempDir.path}/keys_${widget.nickname}.json';
+
+      await sourceFile.copy(tempFilePath);
+
+      await mediaStore.saveFile(
+        tempFilePath: tempFilePath,
+        dirType: DirType.download,
+        dirName: DirName.download,
+        relativePath: "MySecureKeys",
+      );
+    } catch (e) {
+      print("❌ Hata oluştu: $e");
+    }
   }
 
   @override
@@ -949,17 +978,43 @@ class _HomePageState extends State<HomePage> {
             ),
             iconTheme: const IconThemeData(color: Colors.white),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.logout),
-                tooltip: 'Çıkış Yap',
-                onPressed: () {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => const MainPage()),
-                    (route) => false,
-                  );
-                },
-              ),
+              if (defaultTargetPlatform == TargetPlatform.android)
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: Colors.white),
+                  onSelected: (value) {
+                    if (value == 'logout') {
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(builder: (context) => const MainPage()),
+                        (route) => false,
+                      );
+                    } else if (value == 'download_keys') {
+                      saveToDownloadWithMediaStore();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem<String>(
+                      value: 'logout',
+                      child: Text('Çıkış Yap'),
+                    ),
+                    const PopupMenuItem<String>(
+                      value: 'download_keys',
+                      child: Text('Keys Dosyasını İndir'),
+                    ),
+                  ],
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.logout),
+                  tooltip: 'Çıkış Yap',
+                  onPressed: () {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (context) => const MainPage()),
+                      (route) => false,
+                    );
+                  },
+                ),
             ],
           ),
         ),
